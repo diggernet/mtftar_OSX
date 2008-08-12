@@ -99,6 +99,7 @@ unsigned char *mtfscan_string(struct mtf_stream *s, struct mtf_tape_pos q, int s
 {
 	unsigned int i;
 	unsigned int n;
+	unsigned int cx, cx2;
 	unsigned char *uc;
 	unsigned char *out, *p;
 
@@ -109,14 +110,22 @@ unsigned char *mtfscan_string(struct mtf_stream *s, struct mtf_tape_pos q, int s
 	if (!mtfscan_ready(s, q.pos + q.size)) return 0;
 
 	if (!(s->stringtype & 1)) {
-		/* internally in UCS-2LE */
+		/* internally in UTF16LE */
 
 		/* find utf-8 length */
 		for (i = n = 0; i < q.size; i += 2) {
 			uc = (unsigned char *)&s->buffer[q.pos + i];
-			if (uc[1] & 0xF8) n += 3;
-			else if (uc[1] | (uc[0] & 0x80)) n += 2;
-			else n++;
+			cx = uc[0] | (((unsigned int)uc[1]) << 8);
+			if (cx >= 0xd800 && cx <= 0xe000) {
+				if (i+3 >= q.size) return 0; // pedantic
+				cx2 = uc[2] | (((unsigned int)uc[3]) << 8);
+				cx = (cx2 & 0x3ff) + ((cx & 0x3f)<<10) + (((cx & 0x3c0) + 0x40) << 10);
+				i += 2;
+			}
+			if (cx < 0x80) n++;
+			else if (cx < 0x800) n += 2;
+			else if (cx < 0x10000) n += 3;
+			else n += 4;
 		}
 
 		/* convert to UTF8 */
@@ -124,21 +133,29 @@ unsigned char *mtfscan_string(struct mtf_stream *s, struct mtf_tape_pos q, int s
 		if (!p) return 0;
 		for (i = n = 0; i < q.size; i += 2) {
 			uc = (unsigned char *)&s->buffer[q.pos + i];
-			if (!uc[0] && !uc[1]) {
-				p[0] = sz & 0x7F;
-				p++;
-			} else if (uc[1] & 0xF8) {
-				p[0] = 0xE0 | (uc[1] >> 4);
-				p[1] = 0x80 | ((uc[1] & 15) << 2) | (uc[0] >> 6);
-				p[2] = 0x80 | (uc[0] & 0x3F);
-				p += 3;
-			} else if (uc[1] | (uc[0] & 0x80)) {
-				p[0] = 0xC0 | (uc[1] << 2);
-				p[1] = 0x80 | (uc[0] & 0x3F);
-				p += 2;
+			cx = uc[0] | (((unsigned int)uc[1]) << 8);
+			if (cx == 0 && i+2 < q.size) cx = sz;
+
+			if (cx >= 0xd800 && cx <= 0xe000) {
+				if (i+3 >= q.size) return 0; // pedantic
+				cx2 = uc[2] | (((unsigned int)uc[3]) << 8);
+				cx = (cx2 & 0x3ff) + ((cx & 0x3f)<<10) + (((cx & 0x3c0) + 0x40) << 10);
+				i += 2;
+			}
+			if (cx < 0x80) {
+				*p++ = cx & 255;
+			} else if (cx < 0x800) {
+				*p++ = 0xc0 + ((cx >> 6) & 0x1f);
+				*p++ = 0x80 + (cx & 0x3f);
+			} else if (cx < 0x10000) {
+				*p++ = 0xe0 + ((cx>>12) & 0x0f);
+				*p++ = 0x80 + ((cx>>6) & 0x3f);
+				*p++ = 0x80 + (cx & 0x3f);
 			} else {
-				p[0] = uc[0];
-				p++;
+				*p++ = 0xf0 + ((cx >> 18) & 7);
+				*p++ = 0x80 + ((cx >> 12) & 0x3f);
+				*p++ = 0x80 + ((cx >> 6) & 0x3f);
+				*p++ = 0x80 + (cx & 0x3f);
 			}
 		}
 		p[0] = 0; /* nul */
@@ -149,7 +166,7 @@ unsigned char *mtfscan_string(struct mtf_stream *s, struct mtf_tape_pos q, int s
 		memcpy(out, &s->buffer[q.pos], q.size);
 		if (sz) {
 			for (i = 0; i < q.size; i++)
-				if (!out[i]) out[i] = sz;
+				if (!out[i] && (i+1) < q.size) out[i] = sz;
 		}
 		out[q.size] = 0;
 	}

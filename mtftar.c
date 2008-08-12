@@ -142,11 +142,11 @@ int main(int argc, char *argv[])
 			if (sizeof(idxpos) == sizeof(int)) {
 				r = sscanf(optarg, "%u,%u,%ld,%*s",
 						&skip_flb,
-						(int *)&idxpos, &mtime);
+						(int *)(void*)&idxpos, &mtime);
 			} else if (sizeof(idxpos) == sizeof(long)) {
 				r = sscanf(optarg, "%u,%lu,%ld,%*s",
 						&skip_flb,
-						(long *)&idxpos, &mtime);
+						(long *)(void*)&idxpos, &mtime);
 			} else {
 				r = sscanf(optarg, "%u,%llu,%ld,%*s",
 						&skip_flb,
